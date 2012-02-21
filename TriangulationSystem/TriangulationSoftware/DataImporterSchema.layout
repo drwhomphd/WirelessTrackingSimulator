@@ -1,0 +1,16 @@
+CREATE TABLE tree_data(
+	id INTEGER PRIMARY KEY, -- primary key
+	obj_id TEXT,		-- object ID in data file
+	obj_type INTEGER,	-- object Type in data file
+	x_coord REAL,		-- object's x_coordinate
+	y_coord REAL,		-- object's y_coordinate
+	encryption INTEGER,	-- does the object use encryption?
+	can_detect INTEGER,	-- can the object detect another object?
+	round INTEGER		-- round which holds this object's position
+);
+
+CREATE VIRTUAL TABLE tree_index USING rtree(
+id,		-- Integer primary key
+min_x, max_x,	-- Minimum and Maximum X Dimensions
+min_y, max_y	-- Minimum and Maximum Y Dimensions
+);

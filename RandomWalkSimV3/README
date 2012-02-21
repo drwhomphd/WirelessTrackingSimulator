@@ -1,0 +1,43 @@
+
+### INTRODUCTION ###
+Version 3 of the random walk simulator consists of multiple parts:
+* Random Walk Simulator or other Mobility Simulator
+* Data Importer
+* Data Analyzer
+* Data Visualizer
+
+The Random Walk Simulator included performs a simple random walk 
+using a gaussian distribution to determine location. The simulator only 
+outputs latitudes and longitudes of base stations and mobile agents. The 
+simulator can simulator multiple agents using multiple "threads" 
+(process is forked in python). 
+
+The Data Importer imports the various mobility simulator data formats 
+into a standard SQLITE Database
+
+The Data Analyzer looks at the information in the SQL Lite database and 
+determines what agents are within range of other agents. It will also 
+export statistics based on this data.
+
+The Data Visualizer will visualize the data output by the Data Analyzer 
+using Google Earth and KML.
+
+
+### FILE FORMATS ###
+
+Random Walk Simulator:
+This simulator outputs a comma delimited file without colum headings. 
+The colum headings are the following:
+entity_id,device_type,x_loc,y_loc,encryption,round
+
+* entity_id = Unique identifier of the enetity. If it starts with a 'p' 
+	it's a mobile agent. If it starts with a 'b' It's a base 
+	station.  
+* device_type = This will be used if different devices are chosen
+* x_loc = The x_location of the device.
+* y_loc = the y_location of the device.
+* encryption = Does the device use an encrypted key to connect? This is
+	currently only being considered for wireless base stations.
+* round = The round number for the current position. If the round 
+	number is X, then the device never moves.
+

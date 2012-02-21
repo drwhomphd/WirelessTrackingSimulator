@@ -1,0 +1,445 @@
+#!/usr/bin/env python
+#
+# Data Importer
+# This script imports various data files output by mobility simulators
+# into our specific database file format for analysis with the Data Analyzer.
+# Different load functions will be used for various different data file types
+# assuming better simulators are found.
+
+# Data Table used is based off the format in the random walk sim
+# [0] = Number of people
+# [1] = Number of rounds
+# [2+] = Actual data from file following colum description below
+# Colums:
+# agent_id, type_id, x_coord, y_coord, encrypted?, round
+# The database contains a can_detect column as well. Database layout looks like:
+# agent_id, type_id, x_coord, y_coord, z_coord, encrypted?, cand_detect, round
+
+# IMPORTS
+import os
+import sys
+import random
+import apsw as sqlite
+import progressbar
+
+# GLOBAL VALUES
+# This is the percentage chance that the can_detect flag will be set for a router
+CHANCE_SET_DETECTION = 100.0
+M_PER_LON = 111000.132
+M_PER_LAT = 111000.0
+UDEL_Y_ADJUST = -200.8
+UDEL_X_ADJUST = -248.3
+# This is the upper left index value for a longitude that all other lat/lon values
+# are decided from
+# 2KMx2KM
+#UDEL_INDEX_LON = -87.644359
+#UDEL_INDEX_LAT = 41.889792
+
+# 9BLK SQUARE
+UDEL_INDEX_LON = -87.635454
+UDEL_INDEX_LAT = 41.886739
+
+# FUNCTIONS
+
+# This creates the base database layout that will later be filled
+def create_db_layout(databaseFile):
+    os.system("sqlite3 %s < DataImporterSchema.layout" % (databaseFile))
+# end
+
+# This loads data from the data files of the random walk simulator.
+def load_random_walk_sim_data(importFile):
+
+    # Local Variables
+    dataTable = []
+
+    # Open the file
+    input = open(importFile, 'r')
+
+    # Get number of people
+    line = input.readline()
+    split = line.split(":")
+    dataTable.append(split[1].strip('\n'))
+
+
+    # Get number of rounds
+    line = input.readline()
+    split = line.split(":")
+    split[1].rstrip()
+    split[1].lstrip()
+    dataTable.append(split[1].strip('\n'))
+
+    # Loop through each line in file
+    for line in input.readlines():
+
+        # Local Variables
+        linesplit = []
+
+        # Remove whitespace
+        line.strip('\n')
+
+        # Split the line by its commans
+        linesplit = line.split(',')
+
+        # Append new array to dataTable
+        dataTable.append(linesplit)
+
+    # End for
+    return dataTable
+# End load_random_walk_sim_data
+
+# Loads the UDEL model sim data.
+# Rounds in this case equal one second
+def load_udel_sim_data(importFile, routerDataFile):
+    # Local Variables
+    dataTable = []
+    canDetectDict = {}
+    numberOfPeople = 0  # File starts at an ID of 1
+    numberOfRounds = 0  # File starts at a time of 0
+
+    # Open the file
+    input = open(importFile, 'r')
+
+    #lines = input.readlines()
+
+    # Load router data into data table
+    print("\tLoading Router Data...")
+    if routerDataFile != '':
+        dataTable = load_router_data(routerDataFile)
+    else:
+        dataTable = []
+    # End if
+
+    print("\tLoading Mobility Data...")
+    # Format
+    # NodeID Time (XCoordinate,YCoordinate,ZCoordinate) NotUsed NotUsed HostType # NodeType FloorNum TaskNum
+    # Run through each line in file
+    for line in input:
+
+        # Local Variables
+        agentID = ""
+        typeID = ""
+        x_coord = ""
+        y_coord = ""
+        z_coord = ""
+        encrypted = "0"
+        round = ""
+
+        # Strip line
+        line.strip()
+
+        # Split the line
+        lineElements = line.split(' ')
+
+        # If the element is a base station, skip the line. We don't want theirs
+        if lineElements[7] is not '1' and lineElements[7] is not '0':
+            continue
+        # End if
+
+        if int(lineElements[8]) >= 10000:
+            continue
+        # End If
+
+        typeID = "1"
+
+        if lineElements[1] == '0':
+            numberOfPeople += 1
+        # End If
+
+        # Check time, if its greater then our current record of rounds,
+        # incremement our current number of rounds
+        if int(lineElements[1]) > numberOfRounds:
+            numberOfRounds = int(lineElements[1])
+
+        # Otherwise, get things ready to add to the array
+        # Colums:
+        # agent_id, type_id, x_coord, y_coord, encrypted?, round
+        if lineElements[7] == '1':
+            agentID = 'c' + lineElements[0]
+            typeID = "2"
+        if lineElements[7] == '0':
+            agentID = 'p' + lineElements[0]
+            typeID = "1"
+
+        round = lineElements[1]
+
+        if agentID not in canDetectDict:
+            # Set the can_detect flag
+            # Get random number
+            randNum = 0
+            randNum = random.randrange(0,100)
+            if randNum < CHANCE_SET_DETECTION:
+                canDetectDict[agentID] = 1
+            else:
+                canDetectDict[agentID] = 0
+            # End if
+        # End if
+
+        # Process X,Y,Z coordinates
+
+        # Set tmpTuple to the 3-tupe of x,y,z coordinates.
+        # Don't grab the first and last characters. They're parenthesis
+        # We'd be splitting them out anyway.
+        tmpTuple = lineElements[2][1:len(lineElements[2])-1]
+        # Split out the commas
+        tmpSplitTuple = tmpTuple.split(',')
+
+        # Set X,Y coordinates
+        #x_coord = (float(tmpSplitTuple[0]) * (1.0 / M_PER_LON)) + UDEL_INDEX_LON
+        #y_coord = UDEL_INDEX_LAT - (float(tmpSplitTuple[1]) * (1.0 / M_PER_LAT))
+
+        # This adjusts for the discovery that the origin really isn't at 0,0
+        x_coord = ((float(tmpSplitTuple[0]) + UDEL_X_ADJUST) * (1.0 / M_PER_LON)) + UDEL_INDEX_LON
+        y_coord = UDEL_INDEX_LAT - ((float(tmpSplitTuple[1]) + UDEL_Y_ADJUST) * (1.0 / M_PER_LAT))
+        z_coord = float(tmpSplitTuple[2])
+
+        # Now that we have all our info, append it to the data table
+        dataTable.append([agentID, typeID, x_coord, y_coord, z_coord, encrypted, round,canDetectDict[agentID]])
+    # End for
+
+    # Add the number of people and the number of rounds to the front of the table
+    dataTable.insert(0, numberOfRounds)
+    dataTable.insert(0, numberOfPeople)
+
+    return dataTable
+# end load_udel_sim_data
+
+def load_router_data(routerDataFileName):
+    input = open(routerDataFileName, 'r')
+
+    routerPoints = []
+    canDetect = {}
+
+    for line in input.readlines():
+
+        # Strip off any white space
+        line = line.rstrip()
+        line = line.lstrip()
+
+        # Split on the comma
+        splitLine = line.split(",")
+        
+        agentID = 'b' + splitLine[0]
+        
+        if agentID not in canDetectDict:
+            # Set the can_detect flag
+            # Get random number
+            randNum = 0
+            randNum = random.randrange(0,100)
+            if randNum < CHANCE_SET_DETECTION:
+                canDetectDict[agentID] = 1
+            else:
+                canDetectDict[agentID] = 0
+            # End if
+        # End if
+
+        # File format:
+        # RouterID, Y Coordinate, X Coordinate, Encryption?
+        # DataTable format:
+        # agent_id, type_id, x_coord, y_coord, z_coord, encrypted?, round
+        routerPoints.append( [ 'b' + splitLine[0], 0, float(splitLine[2]),float(splitLine[1]), 0, splitLine[3], '-1', canDetectDict[agentID] ] )
+    # End for
+
+    input.close()
+
+    return routerPoints
+# end load_router_data
+
+# Imports data table imformation to the sqlite table
+def import_to_sqlite(dataTable, databaseFile):
+
+    # Seed the randomizer for later use
+    random.seed()
+
+    # Local Variables
+    privKeyCount = long(0)
+
+    # Connect to Database
+    conn = sqlite.Connection(databaseFile)
+
+    # Create Cursor
+    curs = conn.cursor()
+
+    # Get Meta Info from dataTable array
+    personCount = int(dataTable[0])
+    roundNumber = int(dataTable[1])
+
+    # Set Up A Progress Bar using the progressbar.py class
+    widgets = ['Progress: ', progressbar.Percentage(), ' ', progressbar.Bar(),' ', progressbar.ETA()]
+    maxval = long((len(dataTable) - 2 -(personCount * roundNumber)) + (personCount * roundNumber))
+    pbar = progressbar.ProgressBar(widgets=widgets, maxval=maxval).start()
+    pbarStatus = 0
+
+    curs.execute("PRAGMA journal_mode = MEMORY")
+    curs.execute("PRAGMA temp_store = MEMORY")
+
+    curs.execute("BEGIN TRANSACTION")
+
+    # Loop through all data table elements and add them to the database
+    for count in xrange(2, len(dataTable)):
+        # Local variables
+        temp = ""   # Type Check Variable
+
+        # Check to see if it's a person or a base station
+        #[agentID, typeID, x_coord, y_coord, z_coord, encrypted, round]
+        temp = dataTable[count][0]
+        if temp[0] == 'b':
+            # If it's a base station, see if it's immobile. If it is. Add it to
+            # the database at the same location for each round
+            if dataTable[count][6].strip() == '-1':
+                # Update progress bar
+                pbarStatus += 1
+                pbar.update(pbarStatus)
+
+                # General Private Key Value
+                # The Private Key Value is a concatenation of:
+                # integer representation of entity_ID character + entity_ID
+                # + round #
+                pkey = privKeyCount
+
+                # Set other values for import
+                xVal = float(dataTable[count][2])
+                yVal = float(dataTable[count][3])
+                zVal = float(dataTable[count][4])
+                objId = dataTable[count][0]
+                objType = int(dataTable[count][1])
+                encrypt = dataTable[count][5]
+                canDetect = int(dataTable[count][7])
+                round = int(dataTable[count][6].strip())
+
+                # Set the can_detect flag
+                # Get random number
+                #randNum = 0
+                #randNum = random.randrange(0,100)
+                #if randNum < CHANCE_SET_DETECTION:
+                #    canDetect = 1
+
+                # Convert the encrypt type from character to 0/1 value
+                if encrypt == 'Y': encrypt = 1
+                else: encrypt = 0
+
+                # Add values to both tables
+                curs.execute("INSERT INTO tree_data VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (pkey, objId, objType, xVal, yVal, zVal, encrypt, canDetect, round))
+                curs.execute("INSERT INTO tree_index VALUES (?, ?, ?, ?, ?, ?, ?)", (pkey, xVal, xVal, yVal, yVal, zVal, zVal))
+
+                privKeyCount += 1
+            # End if
+        # If it's not a base station, it's a person
+        else:
+            # Update progress bar
+            pbarStatus += 1
+            pbar.update(pbarStatus)
+
+            # Generate primary key
+            pkey = privKeyCount
+
+            # Set other values for import
+            xVal = float(dataTable[count][2])
+            yVal = float(dataTable[count][3])
+            zVal = float(dataTable[count][4])
+            objId = dataTable[count][0]
+            canDetect = dataTable[count][7]
+            objType = int(dataTable[count][1])
+            encrypt = dataTable[count][5]
+            round = int(dataTable[count][6])
+
+            # Convert the encrypt type from character to 0/1 value
+            if encrypt == 'Y': encrypt = 1
+            else: encrypt = 0
+
+            # Add values to both tables
+            curs.execute("INSERT INTO tree_data VALUES (?,?,?,?,?,?,?,?,?)", (pkey, objId, objType, xVal, yVal, zVal, encrypt, canDetect, round))
+            curs.execute("INSERT INTO tree_index VALUES (?,?,?,?,?,?,?)", (pkey, xVal, xVal, yVal, yVal, zVal, zVal))
+
+            privKeyCount += 1
+        # End if
+    # End for
+
+    # Kill the progress bar
+    pbar.finish()
+
+    # Create an index on the round field
+    curs.execute("CREATE INDEX data_round_index ON tree_data (obj_id, can_detect, round)")
+
+    curs.execute("COMMIT TRANSACTION")
+
+    conn.close()
+# End load_random_walk_sim_data
+
+# MAIN
+if __name__ == '__main__':
+
+    # Local Variables
+    fileToImport = ""
+    fileType = ""
+    loadedData = []
+    routerDataFile = ""
+
+    # Check command line arguments
+    if len(sys.argv) < 4:
+        print("DataImporter.py [Database File] [File to Import] [File Type] [router data file*] [chance to set detection flag*] [Udel Sim type]")
+        print("\tFile Type Options:")
+        print("\trandwalksim -- Random Walk Simulator V2")
+        print("\tudelsim -- UDel Models Simulator")
+        print("****")
+        print("\t Udel Sim Type:")
+        print("\t0 -- 2KM by 2KM Chicago")
+        print("\t1 -- 9 Block Square Chicago")
+        print("\t2 -- 9 Block Dallas")
+        sys.exit(1)
+    else:
+        databaseFile = sys.argv[1]
+        fileToImport = sys.argv[2]
+        fileType = sys.argv[3]
+
+        if len(sys.argv) == 5:
+            CHANCE_SET_DETECTION = float(sys.argv[4])
+        elif len(sys.argv) == 7:
+            routerDataFile = sys.argv[4]
+            CHANCE_SET_DETECTION = float(sys.argv[5])
+            # If the sim type is 2KM by 2KM in Chicago
+            if int(sys.argv[6]) == 0:
+                UDEL_INDEX_LON = -87.644359
+                UDEL_INDEX_LAT = 41.889792
+                # Data offset for 2kmX2km
+                UDEL_Y_ADJUST = -634.41
+                UDEL_X_ADJUST = -149.24
+            # If the sim type is 9 Block Square in Chicago
+            elif int(sys.argv[6]) == 1:
+                # Starting point for 9Blk Data
+                UDEL_INDEX_LON = -87.635454
+                UDEL_INDEX_LAT = 41.886739
+                # Data offset for 9Blk data
+                UDEL_Y_ADJUST = -200.8
+                UDEL_X_ADJUST = -248.3
+            elif int(sys.argv[6]) == 2:
+                UDEL_INDEX_LON = -96.801526
+                UDEL_INDEX_LAT =  32.781577
+                UDEL_Y_ADJUST = -460
+                UDEL_X_ADJUST = -213
+            #End If
+
+
+        # End if
+    # End if
+
+
+    print("Chance to set detection: %d" % (CHANCE_SET_DETECTION))
+    print("Creating DB Layout")
+    # Create Database Layout
+    create_db_layout(databaseFile)
+
+    print("Loading Data From %s" % (fileToImport))
+    # Load Data From File
+    if fileType == "randwalksim":
+        loadedData = load_random_walk_sim_data(fileToImport)
+    elif fileType == "udelsim":
+        loadedData = load_udel_sim_data(fileToImport, routerDataFile)
+    # End if
+
+
+    print("Importing into SQL Table")
+    # Import data into SQLite database
+    import_to_sqlite(loadedData, databaseFile)
+
+    sys.exit(0)
+# DONE
